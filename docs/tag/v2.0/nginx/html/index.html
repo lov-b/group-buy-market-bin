@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>手写MyBatis：渐进式源码实践 - 小傅哥拼团</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* 支付确认弹窗样式 */
+        .payment-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .payment-modal {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .payment-modal h3 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+
+        .payment-modal p {
+            margin: 10px 0;
+            color: #666;
+        }
+
+        .copyable {
+            cursor: pointer;
+            color: #007bff;
+            text-decoration: underline;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .confirm-btn, .cancel-btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .confirm-btn {
+            background-color: #ff6b35;
+            color: white;
+        }
+
+        .cancel-btn {
+            background-color: #f8f9fa;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+
+        /* 用户信息栏样式 */
+        .user-bar {
+            padding: 10px 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .user-bar span {
+            font-weight: bold;
+        }
+
+        #logoutBtn {
+            padding: 6px 12px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        #logoutBtn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* 页面加载指示器 */
+        .page-loader {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 3000;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #ff6b35;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+<!-- 页面加载指示器 -->
+<div class="page-loader" id="pageLoader">
+    <div class="spinner"></div>
+</div>
+
+<!-- 主容器 -->
+<div class="container" id="mainContainer" style="display: none;">
+    <!-- 用户信息栏 -->
+    <div class="user-bar">
+        <div>
+            <i class="fas fa-user"></i>
+            <span id="userInfo">正在加载用户信息...</span>
+        </div>
+        <button id="logoutBtn" style="display: none;">退出登录</button>
+    </div>
+
+    <!-- 轮播图 -->
+    <div class="swiper-container">
+        <div class="swiper-wrapper" id="swiperWrapper">
+            <!-- 轮播图由JS动态生成 -->
+        </div>
+        <div class="swiper-pagination" id="swiperPagination">
+            <!-- 分页点由JS动态生成 -->
+        </div>
+    </div>
+
+    <div class="product-info">
+        <h1 class="product-title">手写MyBatis：渐进式源码实践（全彩）</h1>
+        <div class="product-promo" id="productPromo">加载中...</div>
+        <div class="product-price">
+            <div class="current-price" id="currentPrice">-</div>
+            <div class="original-price" id="originalPrice">-</div>
+        </div>
+        <div class="sale-info">
+            <div class="sale-count" id="saleCount">加载中...</div>
+            <div>拼单即将结束</div>
+        </div>
+    </div>
+
+    <!-- 拼团信息 -->
+    <div class="group-info">
+        <div class="group-title">
+            <i class="fas fa-users"></i>
+            <span>正在拼团，可直接参与</span>
+        </div>
+        <div class="group-list" id="groupList">
+            <!-- 动态生成拼团列表 -->
+            <div class="loading-text">加载中...</div>
+        </div>
+    </div>
+
+    <!-- 底部操作栏 -->
+    <div class="footer-bar">
+        <div class="footer-left">
+            <div class="price-section">
+                <div class="final-price" id="finalPrice">-</div>
+                <div class="original-price-small" id="originalPriceSmall">-</div>
+            </div>
+        </div>
+        <div class="footer-buttons">
+            <button class="btn-buy" id="buyBtn">单独购买</button>
+            <button class="btn-group" id="groupBuyBtn">开团购买</button>
+        </div>
+    </div>
+</div>
+
+<!-- 支付确认弹窗 -->
+<div class="payment-overlay" id="paymentOverlay" style="display: none;">
+    <div class="payment-modal">
+        <h3 id="paymentTitle">支付确认</h3>
+        <p>商品名称：手写MyBatis：渐进式源码实践（全彩）</p>
+        <p>商品ID：9890001</p>
+        <p>活动ID：100123</p>
+        <p>支付金额：<span id="modalPriceAmount">-</span></p>
+        <p>支付方式：<span id="paymentTypeText">-</span></p>
+        <p>买家账号：<span class="copyable" data-copy="cweqls5466@sandbox.com">cweqls5466@sandbox.com</span></p>
+        <p>登录密码：111111</p>
+        <p>支付密码：111111</p>
+        <div class="modal-buttons">
+            <button class="confirm-btn" id="confirmPaymentBtn">确认支付</button>
+            <button class="cancel-btn" id="cancelPaymentBtn">取消支付</button>
+        </div>
+    </div>
+</div>
+
+<!-- 通知 -->
+<div class="notification" id="notification"></div>
+
+<script src="js/main.js"></script>
+
+<script>
+    // 全局变量
+    let productData = null;
+    let currentUser = null;
+    let currentPaymentPrice = 0;
+    let currentPaymentType = ''; // 'single', 'group_create', 'group_join'
+    let currentTeamId = null;
+    let currentActivityId = 100123; // 固定活动ID
+    let countdownTimers = []; // 存储所有倒计时定时器
+<!--    const sPayMallUrl = "http://127.0.0.1:8080"; // 支付服务地址-->
+    const sPayMallUrl = "http://127.0.0.1"; // 支付服务地址
+<!--    const groupMarketUrl = "http://127.0.0.1:8091"; // 拼团服务地址-->
+    const groupMarketUrl = "http://127.0.0.1"; // 拼团服务地址
+    const goodsId = "9890001"; // 固定商品ID
+
+    // 根据后端测试，定义市场类型常量
+    const MarketType = {
+        SINGLE_PAY_MARKET: "SINGLE_PAY_MARKET",  // 单独购买
+        GROUP_BUY_MARKET: "GROUP_BUY_MARKET"     // 拼团购买
+    };
+
+    // 获取Cookie
+    function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+        return null;
+    }
+
+    // 设置Cookie
+    function setCookie(name, value, days) {
+        let expires = "";
+        if (days) {
+            const date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            expires = "; expires=" + date.toUTCString();
+        }
+        document.cookie = name + "=" + (value || "") + expires + "; path=/";
+    }
+
+    // 删除Cookie
+    function deleteCookie(name) {
+        document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/';
+    }
+
+    // 检查登录状态 - 修改为跳转到login.html
+    function checkLogin() {
+        const loginToken = getCookie("loginToken");
+        if (loginToken) {
+            currentUser = loginToken;
+            updateUserInfo();
+            fetchProductData();
+            return true;
+        } else {
+            // 没有登录，跳转到登录页面
+            window.location.href = "login.html";
+            return false;
+        }
+    }
+
+    // 检查登录状态 - 用于操作前的检查
+    function checkLoginForAction() {
+        const loginToken = getCookie("loginToken");
+        if (loginToken) {
+            return true;
+        } else {
+            // 没有登录，跳转到登录页面
+            window.location.href = "login.html";
+            return false;
+        }
+    }
+
+<!--    // 调试-关闭跳转-->
+<!--    function checkLogin() {-->
+<!--        const loginToken = getCookie("loginToken");-->
+
+<!--        if (loginToken) {-->
+<!--            currentUser = loginToken;-->
+<!--        } else {-->
+<!--            // 👇 临时账号（模拟已登录）-->
+<!--            currentUser = "bingo";-->
+<!--            setCookie("loginToken", currentUser, 1); // 可选：写入 cookie-->
+<!--            console.warn("使用临时测试账号:", currentUser);-->
+<!--        }-->
+
+<!--        updateUserInfo();-->
+<!--        fetchProductData();-->
+<!--        return true;-->
+<!--    }-->
+<!--    // 调试-关闭跳转-->
+<!--    function checkLoginForAction() {-->
+<!--        if (!currentUser) {-->
+<!--            currentUser = "bingo";-->
+<!--        }-->
+<!--        return true;-->
+<!--    }-->
+
+
+    // 更新用户信息显示
+    function updateUserInfo() {
+        const userInfoElement = document.getElementById('userInfo');
+        const logoutBtn = document.getElementById('logoutBtn');
+
+        if (currentUser) {
+            userInfoElement.innerHTML = `<i class="fas fa-user-circle"></i> ${obfuscateUserId(currentUser)}`;
+            logoutBtn.style.display = 'block';
+        } else {
+            userInfoElement.textContent = '未登录';
+            logoutBtn.style.display = 'none';
+        }
+    }
+
+    // 显示主页面
+    function showMainPage() {
+        document.getElementById('mainContainer').style.display = 'block';
+        hidePageLoader();
+    }
+
+    // 显示页面加载器
+    function showPageLoader() {
+        document.getElementById('pageLoader').style.display = 'flex';
+    }
+
+    // 隐藏页面加载器
+    function hidePageLoader() {
+        document.getElementById('pageLoader').style.display = 'none';
+    }
+
+    // 用户退出
+    function logout() {
+        if (confirm('确定要退出登录吗？')) {
+            currentUser = null;
+            deleteCookie("loginToken");
+            updateUserInfo();
+            productData = null;
+            clearAllCountdownTimers();
+
+            // 清空页面数据
+            document.getElementById('productPromo').textContent = '加载中...';
+            document.getElementById('currentPrice').textContent = '-';
+            document.getElementById('originalPrice').textContent = '-';
+            document.getElementById('saleCount').innerHTML = '加载中...';
+            document.getElementById('finalPrice').textContent = '-';
+            document.getElementById('originalPriceSmall').textContent = '-';
+            document.getElementById('groupList').innerHTML = '<div class="loading-text">加载中...</div>';
+
+            // 跳转到登录页面
+            window.location.href = "login.html";
+        }
+    }
+
+    // 获取商品数据
+    async function fetchProductData() {
+        if (!currentUser) {
+            showNotification('请先登录', 'error');
+            return;
+        }
+
+        try {
+            const response = await fetch(groupMarketUrl + '/api/v1/gbm/index/query_group_buy_market_config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    userId: currentUser,
+                    source: "s01",
+                    channel: "c01",
+                    goodsId: goodsId // 使用固定的商品ID
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.code === '0000') {
+                productData = result.data;
+                updateUI();
+                showMainPage();
+            } else {
+                showNotification('数据加载失败，请重试', 'error');
+                hidePageLoader();
+            }
+        } catch (error) {
+            console.error('请求失败:', error);
+            showNotification('网络错误，请检查网络连接', 'error');
+            hidePageLoader();
+        }
+    }
+
+    // 更新UI
+    function updateUI() {
+        if (!productData) return;
+
+        const { goods, teamList, teamStatistic, activityId } = productData;
+        // 注意：这里我们使用固定的activityId 100123
+        // 但如果接口返回了activityId，我们可以使用接口返回的
+        if (activityId) {
+            currentActivityId = activityId;
+        }
+
+        // 更新商品信息
+        document.getElementById('productPromo').textContent = `大促优惠！直降￥${goods.deductionPrice}，${teamStatistic.allTeamUserCount}人再抢，参与马上抢到`;
+        document.getElementById('currentPrice').textContent = goods.payPrice;
+        document.getElementById('originalPrice').textContent = goods.originalPrice;
+        document.getElementById('saleCount').innerHTML = `<strong>${teamStatistic.allTeamUserCount}人</strong> 正在拼单`;
+
+        // 更新底部价格
+        document.getElementById('finalPrice').textContent = goods.payPrice;
+        document.getElementById('originalPriceSmall').textContent = `￥${goods.originalPrice}`;
+
+        // 更新拼团列表
+        updateGroupList(teamList);
+
+        // 更新按钮价格
+        document.getElementById('buyBtn').textContent = `单独购买 (￥${goods.originalPrice})`;
+        document.getElementById('groupBuyBtn').textContent = `开团购买 (￥${goods.payPrice})`;
+    }
+
+    // 格式化时间（将秒转换为HH:mm:ss格式）
+    function formatTime(seconds) {
+        if (seconds <= 0) return "已结束";
+
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    // 计算剩余时间（秒）
+    function calculateRemainingTime(endTimeStr) {
+        const endTime = new Date(endTimeStr);
+        const now = new Date();
+        const diff = Math.floor((endTime - now) / 1000);
+
+        return diff > 0 ? diff : 0;
+    }
+
+    // 更新拼团列表
+    function updateGroupList(teamList) {
+        // 清除之前的定时器
+        clearAllCountdownTimers();
+
+        const groupListElement = document.getElementById('groupList');
+        groupListElement.innerHTML = '';
+
+        if (!teamList || teamList.length === 0) {
+            groupListElement.innerHTML = `
+                <div class="no-team-message">
+                    <i class="fas fa-users-slash"></i>
+                    <p>还没有人开团，快来做第一个开团的人吧！</p>
+                </div>
+            `;
+            return;
+        }
+
+        teamList.forEach((team, index) => {
+            const remaining = team.targetCount - team.lockCount;
+            const remainingSeconds = calculateRemainingTime(team.validEndTime);
+
+            const groupItem = document.createElement('div');
+            groupItem.className = 'group-item';
+            groupItem.dataset.endTime = team.validEndTime;
+            groupItem.dataset.index = index;
+            groupItem.innerHTML = `
+                <div class="group-user">
+                    <div class="user-avatar">${obfuscateUserId(team.userId).charAt(0)}</div>
+                    <div class="user-info">
+                        <div class="user-name">${obfuscateUserId(team.userId)}</div>
+                        <div class="group-status">仅剩${remaining}人，拼单${remaining === 1 ? '即将结束' : '进行中'}</div>
+                    </div>
+                </div>
+                <div class="group-timer" id="timer-${index}">${formatTime(remainingSeconds)}</div>
+                <button class="group-btn" data-team-id="${team.teamId}" data-activity-id="${team.activityId || currentActivityId}">参与拼团</button>
+            `;
+            groupListElement.appendChild(groupItem);
+
+            // 启动倒计时定时器
+            if (remainingSeconds > 0) {
+                startCountdownTimer(index, remainingSeconds);
+            }
+        });
+
+        // 绑定抢单按钮事件
+        document.querySelectorAll('.group-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (!checkLoginForAction()) return;
+                const teamId = this.getAttribute('data-team-id');
+                const activityId = this.getAttribute('data-activity-id');
+                handleGroupJoin(teamId, activityId);
+            });
+        });
+    }
+
+    // 用户ID脱敏处理
+    function obfuscateUserId(userId) {
+        if (!userId) return "未知用户";
+        if (userId.length <= 4) {
+            return userId;
+        } else {
+            const start = userId.slice(0, 2);
+            const end = userId.slice(-2);
+            const middle = '*'.repeat(userId.length - 4);
+            return `${start}${middle}${end}`;
+        }
+    }
+
+    // 启动倒计时定时器
+    function startCountdownTimer(index, initialSeconds) {
+        let remainingSeconds = initialSeconds;
+        const timerElement = document.getElementById(`timer-${index}`);
+
+        // 立即更新一次
+        timerElement.textContent = formatTime(remainingSeconds);
+
+        const timerId = setInterval(() => {
+            remainingSeconds--;
+
+            if (remainingSeconds <= 0) {
+                timerElement.textContent = "已结束";
+                timerElement.classList.add('expired');
+                clearInterval(timerId);
+
+                // 从数组中移除
+                const timerIndex = countdownTimers.findIndex(timer => timer.id === timerId);
+                if (timerIndex > -1) {
+                    countdownTimers.splice(timerIndex, 1);
+                }
+            } else {
+                timerElement.textContent = formatTime(remainingSeconds);
+
+                // 如果剩余时间少于5分钟，添加警告样式
+                if (remainingSeconds < 300) {
+                    timerElement.classList.add('warning');
+                }
+            }
+        }, 1000);
+
+        // 存储定时器ID，以便清除
+        countdownTimers.push({
+            id: timerId,
+            index: index
+        });
+    }
+
+    // 清除所有倒计时定时器
+    function clearAllCountdownTimers() {
+        countdownTimers.forEach(timer => {
+            clearInterval(timer.id);
+        });
+        countdownTimers = [];
+    }
+
+    // 处理加入拼团（参与别人的团）
+    function handleGroupJoin(teamId, activityId) {
+        if (!productData || !currentUser) {
+            showNotification('请先登录', 'error');
+            return;
+        }
+
+        currentTeamId = teamId;
+        currentPaymentType = 'group_join'; // 参与别人的团
+        currentPaymentPrice = productData.goods.payPrice;
+        currentActivityId = activityId || currentActivityId;
+
+        // 调用支付接口
+        createPayOrder();
+    }
+
+    // 创建支付订单
+    async function createPayOrder() {
+        if (!productData || !currentUser) {
+            showNotification('请先登录', 'error');
+            return;
+        }
+
+        const { goods } = productData;
+        const userId = currentUser;
+
+        // 根据支付类型构建请求体
+        const requestBody = {
+            userId: userId,
+            productId: goodsId, // 固定商品ID
+            marketType: currentPaymentType === 'single' ? 0 : 1
+        };
+
+        // 根据不同的支付类型设置不同的参数
+        let paymentTypeText = "";
+
+        if (currentPaymentType === 'single') {
+            // 单独购买
+            currentPaymentPrice = goods.originalPrice;
+            requestBody.activityId = currentActivityId; // 固定活动ID
+            requestBody.teamId = null;
+            paymentTypeText = "单独购买";
+        } else if (currentPaymentType === 'group_create') {
+            // 开团购买（自己成团）
+            currentPaymentPrice = goods.payPrice;
+            requestBody.activityId = currentActivityId; // 固定活动ID
+            requestBody.teamId = null; // 自己开团，没有teamId
+            paymentTypeText = "开团购买";
+        } else if (currentPaymentType === 'group_join') {
+            // 参与别人的团
+            currentPaymentPrice = goods.payPrice;
+            requestBody.activityId = currentActivityId; // 固定活动ID
+            requestBody.teamId = currentTeamId;
+            paymentTypeText = "参与拼团";
+        }
+
+        console.log("创建支付订单请求参数:", JSON.stringify(requestBody));
+
+        try {
+            const response = await fetch(sPayMallUrl + '/api/v1/alipay/create_pay_order', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            const result = await response.json();
+            console.log("创建支付订单响应:", result);
+
+            if (result.code === "0000") {
+                // 清空之前的支付表单
+                document.querySelectorAll('form').forEach(form => form.remove());
+
+                // 插入新的支付表单
+                document.body.insertAdjacentHTML('beforeend', result.data);
+
+                // 显示支付确认弹窗
+                showPaymentConfirm(currentPaymentPrice, paymentTypeText);
+            } else {
+                console.error('Error:', result.info);
+                showNotification('支付订单创建失败: ' + result.info, 'error');
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            showNotification('网络错误，请重试', 'error');
+        }
+    }
+
+    // 显示支付确认弹窗
+    function showPaymentConfirm(price, paymentTypeText) {
+        const overlay = document.getElementById('paymentOverlay');
+        const modalPriceAmount = document.getElementById('modalPriceAmount');
+        const paymentTypeElement = document.getElementById('paymentTypeText');
+        const paymentTitle = document.getElementById('paymentTitle');
+
+        modalPriceAmount.textContent = `￥${price}`;
+        paymentTypeElement.textContent = paymentTypeText;
+        paymentTitle.textContent = `${paymentTypeText}确认`;
+        overlay.style.display = 'block';
+    }
+
+    // 隐藏支付确认弹窗
+    function hidePaymentConfirm() {
+        const overlay = document.getElementById('paymentOverlay');
+        overlay.style.display = 'none';
+    }
+
+    // 显示通知
+    function showNotification(message, type = 'info') {
+        const notification = document.getElementById('notification');
+        notification.textContent = message;
+        notification.className = `notification ${type}`;
+        notification.style.display = 'block';
+
+        setTimeout(() => {
+            notification.style.display = 'none';
+        }, 3000);
+    }
+
+    // 绑定事件
+    function bindEvents() {
+        // 退出登录按钮
+        document.getElementById('logoutBtn').addEventListener('click', function() {
+            logout();
+        });
+
+        // 单独购买
+        document.getElementById('buyBtn').addEventListener('click', function() {
+            if (!checkLoginForAction()) return;
+            currentPaymentType = 'single';
+            currentTeamId = null;
+            createPayOrder();
+        });
+
+        // 开团购买
+        document.getElementById('groupBuyBtn').addEventListener('click', function() {
+            if (!checkLoginForAction()) return;
+            currentPaymentType = 'group_create'; // 自己开团
+            currentTeamId = null;
+            createPayOrder();
+        });
+
+        // 取消支付
+        document.getElementById('cancelPaymentBtn').addEventListener('click', function() {
+            hidePaymentConfirm();
+
+            // 清空支付表单
+            document.querySelectorAll('form').forEach(form => form.remove());
+        });
+
+        // 确认支付
+        document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
+            hidePaymentConfirm();
+
+            // 提交支付表单
+            const form = document.querySelector('form');
+            if (form) {
+                form.submit();
+
+                // 根据支付类型显示不同的提示
+                if (currentPaymentType === 'single') {
+                    showNotification('单独购买提交成功！', 'success');
+                } else if (currentPaymentType === 'group_create') {
+                    showNotification('开团购买提交成功！等待其他人加入', 'success');
+                    // 刷新数据
+                    setTimeout(() => {
+                        fetchProductData();
+                    }, 1000);
+                } else if (currentPaymentType === 'group_join') {
+                    showNotification('参与拼团提交成功！', 'success');
+                    // 刷新数据
+                    setTimeout(() => {
+                        fetchProductData();
+                    }, 1000);
+                }
+            } else {
+                showNotification('支付表单不存在，请重试', 'error');
+            }
+        });
+
+        // 添加复制功能
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('copyable')) {
+                const textToCopy = e.target.getAttribute('data-copy');
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    showNotification('买家账号已复制到剪贴板', 'info');
+                }).catch(err => {
+                    console.error('无法复制文本: ', err);
+                });
+            }
+        });
+    }
+
+    // 初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        bindEvents();
+
+        // 显示页面加载器
+        showPageLoader();
+
+        // 检查登录状态
+        setTimeout(() => {
+            checkLogin();
+        }, 500);
+    });
+
+    // 页面卸载时清除定时器
+    window.addEventListener('beforeunload', function() {
+        clearAllCountdownTimers();
+    });
+</script>
+</body>
+</html>

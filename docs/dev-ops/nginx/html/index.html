@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>手写MyBatis：渐进式源码实践 - 小傅哥拼团</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!-- 主容器 -->
+<div class="container">
+    <!-- 轮播图 -->
+    <div class="swiper-container">
+        <div class="swiper-wrapper" id="swiperWrapper">
+            <!-- 轮播图由JS动态生成 -->
+        </div>
+        <div class="swiper-pagination" id="swiperPagination">
+            <!-- 分页点由JS动态生成 -->
+        </div>
+    </div>
+
+    <!-- 商品信息 -->
+    <div class="product-info">
+        <h1 class="product-title">手写MyBatis：渐进式源码实践（全彩）</h1>
+        <div class="product-promo" id="productPromo">加载中...</div>
+        <div class="product-price">
+            <div class="current-price" id="currentPrice">-</div>
+            <div class="original-price" id="originalPrice">-</div>
+        </div>
+        <div class="sale-info">
+            <div class="sale-count" id="saleCount">加载中...</div>
+            <div>拼单即将结束</div>
+        </div>
+    </div>
+
+    <!-- 拼团信息 -->
+    <div class="group-info">
+        <div class="group-title">
+            <i class="fas fa-users"></i>
+            <span>正在拼团，可直接参与</span>
+        </div>
+        <div class="group-list" id="groupList">
+            <!-- 动态生成拼团列表 -->
+            <div class="loading-text">加载中...</div>
+        </div>
+    </div>
+
+    <!-- 底部操作栏 -->
+    <div class="footer-bar">
+        <div class="footer-left">
+            <div class="price-section">
+                <div class="final-price" id="finalPrice">-</div>
+                <div class="original-price-small" id="originalPriceSmall">-</div>
+            </div>
+        </div>
+        <div class="footer-buttons">
+            <button class="btn-buy" id="buyBtn">单独购买</button>
+            <button class="btn-group" id="groupBuyBtn">开团购买</button>
+        </div>
+    </div>
+</div>
+
+<!-- 支付弹窗 -->
+<div class="modal-overlay" id="paymentModal" style="display: none;">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title">请扫码支付</div>
+        </div>
+        <div class="modal-body">
+            <div class="modal-price" id="modalPrice">-</div>
+            <div class="qrcode">
+                <i class="fas fa-qrcode"></i>
+            </div>
+            <div>请使用微信或支付宝扫描二维码支付</div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-cancel" id="cancelPaymentBtn">取消支付</button>
+            <button class="btn-confirm" id="confirmPaymentBtn">支付完成</button>
+        </div>
+    </div>
+</div>
+
+<!-- 通知 -->
+<div class="notification" id="notification"></div>
+
+<script src="js/main.js"></script>
+
+<script>
+    // 全局变量
+    let productData = null;
+    let currentPaymentPrice = 0;
+    let currentPaymentType = '';
+    let countdownTimers = []; // 存储所有倒计时定时器
+
+    // 获取商品数据
+    async function fetchProductData() {
+        try {
+            const response = await fetch('http://127.0.0.1:8091/api/v1/gbm/index/query_group_buy_market_config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    userId: "bingo",
+                    source: "s01",
+                    channel: "c01",
+                    goodsId: "9890001"
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.code === '0000') {
+                productData = result.data;
+                updateUI();
+            } else {
+                showNotification('数据加载失败，请重试', 'error');
+            }
+        } catch (error) {
+            console.error('请求失败:', error);
+            showNotification('网络错误，请检查网络连接', 'error');
+        }
+    }
+
+    // 更新UI
+    function updateUI() {
+        if (!productData) return;
+
+        const { goods, teamList, teamStatistic } = productData;
+
+        // 更新商品信息
+        document.getElementById('productPromo').textContent = `大促优惠！直降￥${goods.deductionPrice}，${teamStatistic.allTeamUserCount}人再抢，参与马上抢到`;
+        document.getElementById('currentPrice').textContent = goods.payPrice;
+        document.getElementById('originalPrice').textContent = goods.originalPrice;
+        document.getElementById('saleCount').innerHTML = `<strong>${teamStatistic.allTeamUserCount}人</strong> 正在拼单`;
+
+        // 更新底部价格
+        document.getElementById('finalPrice').textContent = goods.payPrice;
+        document.getElementById('originalPriceSmall').textContent = `￥${goods.originalPrice}`;
+
+        // 更新拼团列表
+        updateGroupList(teamList);
+
+        // 更新按钮价格
+        document.getElementById('buyBtn').textContent = `单独购买 (￥${goods.originalPrice})`;
+        document.getElementById('groupBuyBtn').textContent = `开团购买 (￥${goods.payPrice})`;
+    }
+
+    // 格式化时间（将秒转换为HH:mm:ss格式）
+    function formatTime(seconds) {
+        if (seconds <= 0) return "已结束";
+
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    // 计算剩余时间（秒）
+    function calculateRemainingTime(endTimeStr) {
+        const endTime = new Date(endTimeStr);
+        const now = new Date();
+        const diff = Math.floor((endTime - now) / 1000);
+
+        return diff > 0 ? diff : 0;
+    }
+
+    // 更新拼团列表
+    function updateGroupList(teamList) {
+        // 清除之前的定时器
+        clearAllCountdownTimers();
+
+        const groupListElement = document.getElementById('groupList');
+        groupListElement.innerHTML = '';
+
+        if (!teamList || teamList.length === 0) {
+            groupListElement.innerHTML = `
+                <div class="no-team-message">
+                    <i class="fas fa-users-slash"></i>
+                    <p>小伙伴，赶紧去开团吧，做村里最靓的仔。</p>
+                </div>
+            `;
+            return;
+        }
+
+        teamList.forEach((team, index) => {
+            const remaining = team.targetCount - team.lockCount;
+            const remainingSeconds = calculateRemainingTime(team.validEndTime);
+
+            const groupItem = document.createElement('div');
+            groupItem.className = 'group-item';
+            groupItem.dataset.endTime = team.validEndTime;
+            groupItem.dataset.index = index;
+            groupItem.innerHTML = `
+                <div class="group-user">
+                    <div class="user-avatar">${team.userId.charAt(0)}</div>
+                    <div class="user-info">
+                        <div class="user-name">${team.userId}</div>
+                        <div class="group-status">仅剩${remaining}人，拼单${remaining === 1 ? '即将结束' : '进行中'}</div>
+                    </div>
+                </div>
+                <div class="group-timer" id="timer-${index}">${formatTime(remainingSeconds)}</div>
+                <button class="group-btn" data-team-id="${team.teamId}">立即抢单</button>
+            `;
+            groupListElement.appendChild(groupItem);
+
+            // 启动倒计时定时器
+            if (remainingSeconds > 0) {
+                startCountdownTimer(index, remainingSeconds);
+            }
+        });
+
+        // 绑定抢单按钮事件
+        document.querySelectorAll('.group-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const teamId = this.getAttribute('data-team-id');
+                handleGroupJoin(teamId);
+            });
+        });
+    }
+
+    // 启动倒计时定时器
+    function startCountdownTimer(index, initialSeconds) {
+        let remainingSeconds = initialSeconds;
+        const timerElement = document.getElementById(`timer-${index}`);
+
+        // 立即更新一次
+        timerElement.textContent = formatTime(remainingSeconds);
+
+        const timerId = setInterval(() => {
+            remainingSeconds--;
+
+            if (remainingSeconds <= 0) {
+                timerElement.textContent = "已结束";
+                timerElement.classList.add('expired');
+                clearInterval(timerId);
+
+                // 从数组中移除
+                const timerIndex = countdownTimers.findIndex(timer => timer.id === timerId);
+                if (timerIndex > -1) {
+                    countdownTimers.splice(timerIndex, 1);
+                }
+            } else {
+                timerElement.textContent = formatTime(remainingSeconds);
+
+                // 如果剩余时间少于5分钟，添加警告样式
+                if (remainingSeconds < 300) {
+                    timerElement.classList.add('warning');
+                }
+            }
+        }, 1000);
+
+        // 存储定时器ID，以便清除
+        countdownTimers.push({
+            id: timerId,
+            index: index
+        });
+    }
+
+    // 清除所有倒计时定时器
+    function clearAllCountdownTimers() {
+        countdownTimers.forEach(timer => {
+            clearInterval(timer.id);
+        });
+        countdownTimers = [];
+    }
+
+    // 处理加入拼团
+    function handleGroupJoin(teamId) {
+        if (!productData) return;
+
+        // 这里应该调用加入拼团的API
+        // 暂时模拟成功
+        showNotification('加入拼团成功！等待成团', 'success');
+
+        // 刷新数据
+        setTimeout(() => {
+            fetchProductData();
+        }, 500);
+    }
+
+    // 显示通知
+    function showNotification(message, type = 'info') {
+        const notification = document.getElementById('notification');
+        notification.textContent = message;
+        notification.className = `notification ${type}`;
+        notification.style.display = 'block';
+
+        setTimeout(() => {
+            notification.style.display = 'none';
+        }, 3000);
+    }
+
+    // 绑定事件
+    function bindEvents() {
+        // 单独购买
+        document.getElementById('buyBtn').addEventListener('click', function() {
+            if (!productData) return;
+            currentPaymentPrice = productData.goods.originalPrice;
+            currentPaymentType = 'single';
+            document.getElementById('modalPrice').textContent = currentPaymentPrice;
+            document.getElementById('paymentModal').style.display = 'block';
+        });
+
+        // 开团购买
+        document.getElementById('groupBuyBtn').addEventListener('click', function() {
+            if (!productData) return;
+            currentPaymentPrice = productData.goods.payPrice;
+            currentPaymentType = 'group';
+            document.getElementById('modalPrice').textContent = currentPaymentPrice;
+            document.getElementById('paymentModal').style.display = 'block';
+        });
+
+        // 取消支付
+        document.getElementById('cancelPaymentBtn').addEventListener('click', function() {
+            document.getElementById('paymentModal').style.display = 'none';
+        });
+
+        // 支付完成
+        document.getElementById('confirmPaymentBtn').addEventListener('click', function() {
+            document.getElementById('paymentModal').style.display = 'none';
+            const typeText = currentPaymentType === 'single' ? '单独购买' : '开团购买';
+            showNotification(`${typeText}成功！金额：￥${currentPaymentPrice}`, 'success');
+
+            // 如果是开团购买，刷新数据
+            if (currentPaymentType === 'group') {
+                setTimeout(() => {
+                    fetchProductData();
+                    showNotification('拼团创建成功！等待其他人加入', 'info');
+                }, 1000);
+            }
+        });
+    }
+
+    // 初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        fetchProductData();
+        bindEvents();
+    });
+
+    // 页面卸载时清除定时器
+    window.addEventListener('beforeunload', function() {
+        clearAllCountdownTimers();
+    });
+</script>
+</body>
+</html>
